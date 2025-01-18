@@ -80,6 +80,8 @@ To run the application, use the following command:
 streamlit run Chatbot-Code.py
 ```
 
+<img width="1481" alt="image" src="https://github.com/user-attachments/assets/a2d1ff35-1a5d-44ea-9675-64b035a9514e" />
+
 
 
 
