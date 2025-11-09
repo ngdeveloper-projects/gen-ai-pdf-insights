@@ -282,9 +282,14 @@ In **Terminal 2**, run:
 streamlit run Chatbot-Code.py
 ```
 
+<<<<<<< HEAD
 **Expected output:**
 ```
 You can now view your Streamlit app in your browser.
+=======
+<img width="1481" alt="image" src="https://github.com/user-attachments/assets/a2d1ff35-1a5d-44ea-9675-64b035a9514e" />
+
+>>>>>>> ad6f630cd65a9376eceb98b7712b7f5db4074c07
 
   Local URL: http://localhost:8501
   Network URL: http://192.168.29.196:8501
