@@ -1,8 +1,8 @@
 import os
 # CRITICAL: Set Ollama host BEFORE importing any Ollama-related modules
 # This must be done before any imports that use Ollama
-os.environ["OLLAMA_HOST"] = "http://localhost:11434"
-os.environ["OLLAMA_BASE_URL"] = "http://localhost:11434"
+os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
+os.environ["OLLAMA_BASE_URL"] = "http://127.0.0.1:11434"
 
 import streamlit as st
 import requests
@@ -88,7 +88,7 @@ def extract_page_numbers_from_pdf(pdf_reader: PdfReader) -> List[Tuple[str, int,
 class OllamaEmbeddingsWrapper(Embeddings):
     """Custom embedding class that uses direct HTTP requests to avoid port issues"""
     
-    def __init__(self, model: str = "nomic-embed-text", host: str = "http://localhost:11434"):
+    def __init__(self, model: str = "nomic-embed-text", host: str = "http://127.0.0.1:11434"):
         self.model = model
         self.host = host.rstrip('/')
         self.api_url = f"{self.host}/api/embeddings"
@@ -223,7 +223,7 @@ if file is not None:
         
         # Combine all text for chunking
         full_text = "\n".join([text for text, _, _ in text_with_pages])
-        
+
         #Break it into chunks
         text_splitter = RecursiveCharacterTextSplitter(
             separators="\n",
@@ -276,11 +276,11 @@ if file is not None:
         # generating embedding using Ollama
         # Using nomic-embed-text model for embeddings
         # Ensure environment variable is set (in case Streamlit reset it)
-        os.environ["OLLAMA_HOST"] = "http://localhost:11434"
+        os.environ["OLLAMA_HOST"] = "http://127.0.0.1:11434"
         
         try:
             # Test connection first
-            test_response = requests.get("http://localhost:11434/api/tags", timeout=5)
+            test_response = requests.get("http://127.0.0.1:11434/api/tags", timeout=5)
             if test_response.status_code != 200:
                 st.error(f"Ollama server not responding correctly. Status: {test_response.status_code}")
                 st.stop()
@@ -288,7 +288,7 @@ if file is not None:
             # Initialize embeddings using our custom wrapper that properly sets the host
             embeddings = OllamaEmbeddingsWrapper(
                 model="nomic-embed-text",
-                host="http://localhost:11434"
+                host="http://127.0.0.1:11434"
             )
         except requests.exceptions.RequestException as e:
             st.error("❌ **Cannot connect to Ollama server**")
@@ -330,11 +330,15 @@ if file is not None:
 
     # get user question (only show if PDF is uploaded and processed)
     if st.session_state.vector_store is not None:
-        # Add checkbox for showing sources
-        show_sources = st.checkbox("📄 Show sources", value=False, help="Display the source sections from the PDF used to generate the answer")
+        # Add checkboxes for options
+        col1, col2 = st.columns(2)
+        with col1:
+            show_sources = st.checkbox("📄 Show sources", value=False, help="Display the source sections from the PDF used to generate the answer")
+        with col2:
+            include_model_answer = st.checkbox("🤖 Include model answer", value=False, help="If PDF doesn't contain information, generate answer from model knowledge")
         
         user_question = st.text_input("Type Your question here")
-        
+
         # Ensure we only process questions when PDF is uploaded and vector store exists
         if user_question:
             # Show loading spinner while processing the question
@@ -343,102 +347,190 @@ if file is not None:
                 # Get more results if showing sources
                 k = 5 if show_sources else 3
                 match = st.session_state.vector_store.similarity_search(user_question, k=k)
-                #st.write(match)
-
-                #define the LLM using Ollama
-                # You can change the model to llama2, mistral, or any other Ollama model you have installed
-                llm = ChatOllama(
-                    model="llama2",
-                    temperature=0,
-                    base_url="http://localhost:11434"
-                )
-
-                #output results
-                #chain -> take the question, get relevant document from PDF, pass it to the LLM, generate the output
-                chain = load_qa_chain(llm, chain_type="stuff")
-                response = chain.run(input_documents = match, question = user_question)
-            
-            # Display the answer
-            st.markdown("### 💬 Answer:")
-            st.write(response)
-            
-            # Show source information
-            st.markdown("---")
-            st.caption(f"📄 Based on {len(match)} relevant section(s) from your uploaded PDF")
-            
-            # Show sources if checkbox is checked
-            if show_sources:
-                st.markdown("### 📚 Sources:")
                 
-                # Find matching chunks with metadata
-                source_info = []
-                seen_chunks = set()  # To avoid duplicates
+                # Check if the matched content actually contains relevant information
+                # Extract keywords from the question
+                question_keywords = set(word.lower() for word in user_question.split() if len(word) > 3)
                 
+                # Check if any matched document contains the keywords
+                relevant_found = False
+                matched_text = ""
                 for doc in match:
-                    doc_text = doc.page_content.strip()
-                    best_match = None
-                    best_similarity = 0
-                    
-                    # Try to find the best matching chunk
-                    for chunk_meta in st.session_state.chunks_with_metadata:
-                        chunk_text = chunk_meta["text"].strip()
-                        
-                        # Calculate similarity (simple character overlap)
-                        # Check if significant portion of text matches
-                        overlap = min(len(doc_text), len(chunk_text))
-                        if overlap > 100:  # Only check if both are substantial
-                            # Check for substring match
-                            if doc_text[:min(200, len(doc_text))] in chunk_text or \
-                               chunk_text[:min(200, len(chunk_text))] in doc_text:
-                                similarity = min(len(doc_text), len(chunk_text)) / max(len(doc_text), len(chunk_text))
-                                if similarity > best_similarity and chunk_meta["chunk_index"] not in seen_chunks:
-                                    best_similarity = similarity
-                                    best_match = chunk_meta
-                    
-                    # Add best match if found
-                    if best_match and best_match["chunk_index"] not in seen_chunks:
-                        source_info.append({
-                            "page": best_match["page"],
-                            "full_text": best_match["text"],
-                            "chunk_index": best_match["chunk_index"]
-                        })
-                        seen_chunks.add(best_match["chunk_index"])
+                    doc_text_lower = doc.page_content.lower()
+                    matched_text += doc.page_content + "\n\n"
+                    # Check if at least one keyword appears in the matched content
+                    for keyword in question_keywords:
+                        if keyword in doc_text_lower:
+                            relevant_found = True
+                            break
+                    if relevant_found:
+                        break
                 
-                # Display sources
-                if source_info:
-                    # Sort by page number
-                    source_info.sort(key=lambda x: x["page"])
+                # If no relevant information found, handle based on checkbox
+                if not relevant_found and len(question_keywords) > 0:
+                    st.markdown("### 💬 Answer:")
+                    st.warning("❌ **No information found in the uploaded PDF**")
                     
-                    # Group by page
-                    pages_used = sorted(set(s["page"] for s in source_info))
-                    st.info(f"📄 Sources found on page(s): {', '.join(map(str, pages_used))} (out of {st.session_state.total_pages} total pages)")
+                    # If "include model answer" is checked, generate answer from model
+                    if include_model_answer:
+                        st.info("⚠️ **Note:** The following answer is generated from the model's general knowledge, NOT from your uploaded PDF.")
+                        st.markdown("---")
+                        
+                        # Generate answer from model without PDF context
+                        llm = ChatOllama(
+                            model="llama2",
+                            temperature=0,
+                            base_url="http://127.0.0.1:11434"
+                        )
+                        
+                        # Create a simple prompt that indicates this is general knowledge
+                        general_prompt = f"""Answer the following question based on your general knowledge. 
+Note: This question could not be answered from the provided document, so provide a general answer.
+
+Question: {user_question}
+
+Answer:"""
+                        
+                        with st.spinner("Generating answer from model knowledge..."):
+                            response = llm.invoke(general_prompt)
+                            # Extract text from response (ChatOllama returns AIMessage object)
+                            if hasattr(response, 'content'):
+                                model_answer = response.content
+                            elif hasattr(response, 'text'):
+                                model_answer = response.text
+                            else:
+                                model_answer = str(response)
+                        
+                        # Display model answer with clear warning
+                        st.markdown("**📝 Model Answer (Not from PDF):**")
+                        st.markdown("---")
+                        st.write(model_answer)
+                        st.markdown("---")
+                        st.warning("⚠️ **Important:** This answer is from the AI model's general knowledge, not from your uploaded PDF document.")
+                    else:
+                        st.info("The PDF does not contain information related to your question. Please try asking about topics that are covered in the document.")
+                        st.info("💡 **Tip:** Enable 'Include model answer' checkbox to get an answer from the model's general knowledge even when the PDF doesn't contain relevant information.")
                     
-                    for i, source in enumerate(source_info, 1):
-                        with st.expander(f"Source {i} - Page {source['page']} (of {st.session_state.total_pages})", expanded=False):
-                            st.markdown(f"**📍 Page {source['page']}**")
-                            st.markdown("---")
-                            st.text_area(
-                                "Content:",
-                                value=source['full_text'],
-                                height=200,
-                                key=f"source_{i}_{source['chunk_index']}",
-                                label_visibility="collapsed",
-                                disabled=True
-                            )
-                            st.caption(f"Chunk {source['chunk_index'] + 1} from the PDF")
+                    # Show source information
+                    st.markdown("---")
+                    st.caption(f"📄 Searched through {len(match)} section(s) from your uploaded PDF")
+                    
+                    # Show sources if checkbox is checked
+                    if show_sources:
+                        st.markdown("### 📚 Sources:")
+                        st.info("No relevant sources found in the PDF for this query.")
+                        st.markdown("**Searched sections:**")
+                        for i, doc in enumerate(match[:3], 1):  # Show first 3 matches
+                            with st.expander(f"Searched Section {i}", expanded=False):
+                                st.text_area(
+                                    "Content:",
+                                    value=doc.page_content[:500] + "..." if len(doc.page_content) > 500 else doc.page_content,
+                                    height=150,
+                                    key=f"searched_{i}",
+                                    label_visibility="collapsed",
+                                    disabled=True
+                                )
                 else:
-                    # Fallback: show matched content without page numbers
-                    st.warning("⚠️ Could not map to exact page numbers. Showing matched content:")
-                    for i, doc in enumerate(match, 1):
-                        with st.expander(f"Matched Content {i}", expanded=False):
-                            st.text_area(
-                                "Content:",
-                                value=doc.page_content,
-                                height=200,
-                                key=f"match_{i}",
-                                label_visibility="collapsed",
-                                disabled=True
-                            )
+                    # Continue with normal processing if relevant information found
+                    #define the LLM using Ollama
+                    # You can change the model to llama2, mistral, or any other Ollama model you have installed
+                    llm = ChatOllama(
+                        model="llama2",
+                        temperature=0,
+                        base_url="http://127.0.0.1:11434"
+                    )
+
+                    #output results
+                    #chain -> take the question, get relevant document from PDF, pass it to the LLM, generate the output
+                    chain = load_qa_chain(llm, chain_type="stuff")
+                    response = chain.run(input_documents = match, question = user_question)
+                
+                    # Display the answer
+                    st.markdown("### 💬 Answer:")
+                    st.write(response)
+                    
+                    # Show source information
+                    st.markdown("---")
+                    st.caption(f"📄 Based on {len(match)} relevant section(s) from your uploaded PDF")
+                    
+                    # Show sources if checkbox is checked
+                    if show_sources:
+                        st.markdown("### 📚 Sources:")
+                        
+                        # Find matching chunks with metadata
+                        source_info = []
+                        seen_chunks = set()  # To avoid duplicates
+                        
+                        for doc in match:
+                            doc_text = doc.page_content.strip()
+                            best_match = None
+                            best_similarity = 0
+                            
+                            # Try to find the best matching chunk
+                            for chunk_meta in st.session_state.chunks_with_metadata:
+                                chunk_text = chunk_meta["text"].strip()
+                                
+                                # Calculate similarity (simple character overlap)
+                                # Check if significant portion of text matches
+                                overlap = min(len(doc_text), len(chunk_text))
+                                if overlap > 100:  # Only check if both are substantial
+                                    # Check for substring match
+                                    if doc_text[:min(200, len(doc_text))] in chunk_text or \
+                                       chunk_text[:min(200, len(chunk_text))] in doc_text:
+                                        similarity = min(len(doc_text), len(chunk_text)) / max(len(doc_text), len(chunk_text))
+                                        if similarity > best_similarity and chunk_meta["chunk_index"] not in seen_chunks:
+                                            best_similarity = similarity
+                                            best_match = chunk_meta
+                            
+                            # Add best match if found
+                            if best_match and best_match["chunk_index"] not in seen_chunks:
+                                source_info.append({
+                                    "full_text": best_match["text"],
+                                    "chunk_index": best_match["chunk_index"]
+                                })
+                                seen_chunks.add(best_match["chunk_index"])
+                        
+                        # Display sources with high-level information (no page numbers)
+                        if source_info:
+                            # Count occurrences of keywords in sources
+                            question_keywords = [word.lower() for word in user_question.split() if len(word) > 3]
+                            occurrence_count = 0
+                            for source in source_info:
+                                source_lower = source["full_text"].lower()
+                                for keyword in question_keywords:
+                                    occurrence_count += source_lower.count(keyword)
+                            
+                            # Show high-level summary
+                            if occurrence_count > 0:
+                                st.success(f"✅ **Sources found:** {len(source_info)} relevant section(s) with {occurrence_count} occurrence(s) of your query terms")
+                            else:
+                                st.info(f"📄 **Sources found:** {len(source_info)} relevant section(s) from the PDF")
+                            
+                            # Show source content without page numbers
+                            for i, source in enumerate(source_info, 1):
+                                with st.expander(f"Source {i} of {len(source_info)}", expanded=False):
+                                    st.text_area(
+                                        "Content:",
+                                        value=source['full_text'],
+                                        height=200,
+                                        key=f"source_{i}_{source['chunk_index']}",
+                                        label_visibility="collapsed",
+                                        disabled=True
+                                    )
+                                    st.caption(f"Section {source['chunk_index'] + 1} from the PDF")
+                        else:
+                            # Fallback: show matched content
+                            st.info(f"📄 **Sources found:** {len(match)} relevant section(s) from the PDF")
+                            for i, doc in enumerate(match, 1):
+                                with st.expander(f"Source {i} of {len(match)}", expanded=False):
+                                    st.text_area(
+                                        "Content:",
+                                        value=doc.page_content,
+                                        height=200,
+                                        key=f"match_{i}",
+                                        label_visibility="collapsed",
+                                        disabled=True
+                                    )
     else:
         # Show message if no PDF is uploaded yet
         st.info("👆 Please upload a PDF file first to start asking questions.")
